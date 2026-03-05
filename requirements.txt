@@ -1,0 +1,44 @@
+# ==============================================================================
+# requirements.txt — Data Engineering Dependencies
+# ==============================================================================
+#
+# Install: pip install -r requirements.txt
+#
+# Each package maps to a learning module:
+#   config/      → pydantic-settings, python-dotenv
+#   connectors/  → snowflake-connector-python, snowflake-sqlalchemy
+#   models/      → pydantic (data validation & serialization)
+#   ingestion/   → yfinance, requests (stock data APIs)
+#   processing/  → pyspark (big data transformations)
+#   quality/     → great-expectations (data validation)
+#   tests/       → pytest, pytest-cov
+#   cli.py       → click (command-line interfaces)
+# ==============================================================================
+
+# --- Configuration & Environment ---
+pydantic>=2.0
+pydantic-settings>=2.0       # Type-safe .env loading (replaces raw os.getenv)
+python-dotenv>=1.0
+
+# --- Snowflake (Database) ---
+snowflake-connector-python>=3.0
+snowflake-sqlalchemy>=1.5
+sqlalchemy>=2.0
+
+# --- Data Ingestion ---
+yfinance>=0.2                # Yahoo Finance — free stock data (no API key)
+requests>=2.31               # HTTP client for REST APIs
+
+# --- Data Processing ---
+pandas>=2.0                  # DataFrames — core data manipulation
+# pyspark>=3.5               # Uncomment when ready for Phase 3 (needs Java)
+
+# --- CLI ---
+click>=8.0                   # Build command-line tools
+
+# --- Logging ---
+structlog>=23.0              # Structured logging (JSON-friendly)
+
+# --- Testing ---
+pytest>=7.0
+pytest-cov>=4.0

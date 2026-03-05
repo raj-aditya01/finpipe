@@ -1,0 +1,42 @@
+# ==============================================================================
+# .dockerignore — Keep the Docker build context small and secure
+# ==============================================================================
+
+# Virtual environment (NEVER include — image installs its own)
+venv/
+.venv/
+
+# Environment secrets (NEVER bake into image)
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Test files (not needed in production image)
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker files (avoid recursion)
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+
+# Docs
+*.md

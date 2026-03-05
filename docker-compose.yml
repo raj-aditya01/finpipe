@@ -1,0 +1,59 @@
+# ==============================================================================
+# docker-compose.yml — Run finpipe commands easily
+# ==============================================================================
+#
+# WHAT YOU LEARN HERE:
+#   1. docker-compose services — define reusable "run profiles"
+#   2. env_file — pass secrets at runtime (never bake into image)
+#   3. Service overrides — same image, different commands
+#
+# USAGE:
+#   docker-compose run --rm health          # Test Snowflake connection
+#   docker-compose run --rm tables          # List tables
+#   docker-compose run --rm ingest          # Ingest default stocks (5d)
+#   docker-compose run --rm query           # Run default query
+#
+#   # Custom args:
+#   docker-compose run --rm ingest ingest --symbols TCS.NS --period 3mo
+#   docker-compose run --rm query query "SELECT COUNT(*) FROM fact_stock_prices"
+#
+# ==============================================================================
+
+services:
+  # --- Base service (not run directly, others inherit from it) ----------------
+  finpipe:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+
+  # --- Health check ---
+  health:
+    extends:
+      service: finpipe
+    command: ["health"]
+
+  # --- List tables ---
+  tables:
+    extends:
+      service: finpipe
+    command: ["tables", "--count"]
+
+  # --- Ingest stock data ---
+  ingest:
+    extends:
+      service: finpipe
+    command: ["ingest"]
+
+  # --- Create/update schema ---
+  schema:
+    extends:
+      service: finpipe
+    command: ["schema", "--yes"]
+
+  # --- Run a query ---
+  query:
+    extends:
+      service: finpipe
+    command: ["query", "SELECT symbol, trade_date, close_price FROM fact_stock_prices ORDER BY trade_date DESC LIMIT 10"]
