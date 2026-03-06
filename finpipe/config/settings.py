@@ -112,8 +112,26 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = Field(default=300, description="Cache TTL in seconds")
     max_concurrent_downloads: int = Field(default=5, description="Max parallel stock downloads")
     
+    # --- Pipeline settings ---
+    # PIPELINE_ENV controls environment-specific behavior:
+    #   dev:     verbose logging, small batches, relaxed quality checks
+    #   staging: production-like settings, stricter quality checks
+    #   prod:    optimized settings, strict quality checks, full retry
+    pipeline_env: str = Field(default="dev", description="Environment: dev, staging, prod")
+    pipeline_max_retries: int = Field(default=2, description="Max stage retries")
+    pipeline_retry_delay: float = Field(default=5.0, description="Seconds between retries")
+    pipeline_symbols: str = Field(
+        default="TCS.NS,RELIANCE.NS,INFY.NS,HDFCBANK.NS,ICICIBANK.NS",
+        description="Comma-separated stock symbols for pipeline",
+    )
+    
     # --- API Keys (optional) ---
     groq_api_key: str = Field(default="", description="Groq API key (for AI features)")
+    
+    @property
+    def symbols_list(self) -> list[str]:
+        """Parse comma-separated symbols into a list."""
+        return [s.strip() for s in self.pipeline_symbols.split(",") if s.strip()]
     
     @property
     def snowflake_uri(self) -> str:

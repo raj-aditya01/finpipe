@@ -27,7 +27,7 @@ import click
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%H:%M:%S",
+    datefmt="%H:%M:%SI",
 )
 logger = logging.getLogger("finpipe")
 
@@ -296,6 +296,93 @@ def schema(file):
                 click.secho(f"           ERROR: {e}", fg="red")
     
     click.secho("\nSchema setup complete!", fg="green", bold=True)
+
+
+# ==============================================================================
+# COMMAND: pipeline — Full Extract → Validate → Load Pipeline
+# ==============================================================================
+
+@cli.command()
+@click.option(
+    "--symbols", "-s", multiple=True, default=None,
+    help="Stock symbols (overrides PIPELINE_SYMBOLS env var)",
+)
+@click.option("--period", "-p", default="1mo", help="Period: 1d, 5d, 1mo, 3mo, 6mo, 1y")
+@click.option("--incremental/--full", default=True, help="Incremental load (default) or full reload")
+@click.option("--dry-run", is_flag=True, help="Extract + validate only, skip Snowflake load")
+@click.option("--retries", "-r", default=None, type=int, help="Max retries per stage (overrides config)")
+def pipeline(symbols, period, incremental, dry_run, retries):
+    """Run the full production pipeline: Extract → Validate → Load.
+
+    This is the PRODUCTION-GRADE replacement for the simple `ingest` command.
+    It adds: quality validation, retry logic, incremental loading, metrics.
+
+    \b
+    Examples:
+      finpipe pipeline                                  # Incremental, default symbols
+      finpipe pipeline --full -p 3mo                    # Full 3-month reload
+      finpipe pipeline -s TCS.NS -s INFY.NS            # Specific symbols
+      finpipe pipeline --dry-run                        # Extract + validate only
+      finpipe pipeline --retries 5                      # Custom retry count
+    """
+    from finpipe.config import get_settings
+    from finpipe.pipeline.runner import PipelineRunner
+    from finpipe.pipeline.context import PipelineContext
+    from finpipe.pipeline.stages.extract import ExtractStage
+    from finpipe.pipeline.stages.validate import ValidateStage
+    from finpipe.pipeline.stages.load import LoadStage
+
+    settings = get_settings()
+
+    # Resolve symbols: CLI args > env var > defaults
+    if symbols:
+        symbols_list = list(symbols)
+    else:
+        symbols_list = settings.symbols_list
+
+    max_retries = retries if retries is not None else settings.pipeline_max_retries
+
+    click.echo("=" * 60)
+    click.echo("finpipe — Production Pipeline")
+    click.echo("=" * 60)
+    click.echo(f"  Environment: {settings.pipeline_env}")
+    click.echo(f"  Mode:        {'incremental' if incremental else 'full reload'}")
+    click.echo(f"  Symbols:     {', '.join(symbols_list)}")
+    click.echo(f"  Period:      {period}")
+    click.echo(f"  Retries:     {max_retries}")
+    click.echo(f"  Dry run:     {dry_run}")
+    click.echo("-" * 60)
+
+    # Build pipeline stages
+    stages = [
+        ExtractStage(
+            symbols=symbols_list,
+            max_workers=settings.max_concurrent_downloads,
+            period=period,
+            incremental=incremental,
+        ),
+        ValidateStage(),
+    ]
+
+    if not dry_run:
+        stages.append(LoadStage(settings=settings))
+
+    # Create and run the pipeline
+    runner = PipelineRunner(
+        stages=stages,
+        max_retries=max_retries,
+        retry_delay=settings.pipeline_retry_delay,
+        on_success=lambda ctx: click.secho("\nPipeline SUCCEEDED", fg="green", bold=True),
+        on_failure=lambda ctx, msg: click.secho(f"\nPipeline FAILED: {msg}", fg="red", bold=True),
+    )
+
+    try:
+        ctx = runner.run()
+        click.echo("=" * 60)
+
+    except RuntimeError as e:
+        click.echo("=" * 60)
+        sys.exit(1)
 
 
 # ==============================================================================
