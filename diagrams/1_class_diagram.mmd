@@ -1,0 +1,359 @@
+classDiagram
+    direction TB
+
+    %% ════════════════════════════════════════════
+    %% CONFIG MODULE
+    %% ════════════════════════════════════════════
+    namespace config {
+        class Settings {
+            +snowflake_user: str
+            +snowflake_password: str
+            +snowflake_account: str
+            +snowflake_database: str
+            +snowflake_schema: str
+            +snowflake_warehouse: str
+            +snowflake_role: str
+            +log_level: str
+            +pipeline_env: str
+            +pipeline_max_retries: int
+            +pipeline_retry_delay: float
+            +pipeline_symbols: str
+            +symbols_list: list~str~ *
+            +snowflake_uri: str *
+            +snowflake_safe_display: str *
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% MODELS MODULE
+    %% ════════════════════════════════════════════
+    namespace models {
+        class StockSymbol {
+            +symbol: str
+            +company_name: str
+            +exchange: str
+            +sector: str
+            +isin: str
+            +symbol_must_be_uppercase()$ str
+            +exchange_must_be_valid()$ str
+        }
+
+        class StockPrice {
+            +symbol: str
+            +exchange: str
+            +trade_date: date
+            +open_price: float
+            +high_price: float
+            +low_price: float
+            +close_price: float
+            +volume: int
+            +source: str
+            +fetched_at: datetime
+            +daily_range: float *
+            +change_from_open: float *
+            +change_pct: float *
+            +normalize_symbol()$ str
+            +validate_price_consistency() self
+            +to_row() dict
+        }
+
+        class IngestionResult {
+            +symbol: str
+            +source: str
+            +rows_fetched: int
+            +rows_inserted: int
+            +success: bool
+            +error_message: str
+            +duration_seconds: float
+            +summary: str *
+        }
+
+        class Exchange {
+            <<enumeration>>
+            NSE
+            BSE
+        }
+
+        class MarketStatus {
+            <<enumeration>>
+            OPEN
+            CLOSED
+            PRE_MARKET
+            POST_MARKET
+        }
+
+        class TimeFrame {
+            <<enumeration>>
+            DAILY
+            WEEKLY
+            MONTHLY
+        }
+
+        class DataSource {
+            <<enumeration>>
+            SNOWFLAKE
+            YFINANCE
+            NSE_API
+            MANUAL
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% CONNECTORS MODULE
+    %% ════════════════════════════════════════════
+    namespace connectors {
+        class BaseConnector {
+            <<abstract>>
+            #_name: str
+            #_connection: Any
+            #_connected: bool
+            +is_connected: bool *
+            +connect()* void
+            +disconnect()* void
+            +execute_query(query, params)* list~dict~
+            +execute_query_df(query, params)* DataFrame
+            +__enter__() self
+            +__exit__(exc_type, exc_val, exc_tb) bool
+        }
+
+        class SnowflakeConnector {
+            -_settings: Settings
+            -_engine: Engine
+            +connect() void
+            +disconnect() void
+            +execute_query(query, params) list~dict~
+            +execute_query_df(query, params) DataFrame
+            +execute_non_query(query, params) int
+            +table_exists(table_name) bool
+            +get_tables() list~str~
+            +get_row_count(table_name) int
+            -_ensure_connected() void
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% INGESTION MODULE
+    %% ════════════════════════════════════════════
+    namespace ingestion {
+        class YFinanceFetcher {
+            -_max_workers: int
+            -_lock: Lock
+            -_success_count: int
+            -_error_count: int
+            +fetch_single(symbol, start_date, end_date, period) tuple
+            +fetch_multiple(symbols, start_date, end_date, period) list~tuple~
+        }
+
+        class SnowflakeLoader {
+            -_connector: SnowflakeConnector
+            +load_stock_prices(df, table_name) IngestionResult
+            -_write_to_staging(df, staging_table) void
+            -_batch_insert(df, table_name, batch_size) void
+            -_merge_from_staging(staging, target) int
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% PIPELINE MODULE
+    %% ════════════════════════════════════════════
+    namespace pipeline {
+        class PipelineContext {
+            +run_id: str
+            +started_at: datetime
+            +params: dict
+            +data: dict~str_DataFrame~
+            +metrics: dict~str_StageMetric~
+            +state: dict
+            +set_dataframe(key, df) void
+            +get_dataframe(key) DataFrame
+            +start_stage(name) StageMetric
+            +end_stage(name, status, rows_in, rows_out) void
+            +summary_report() str
+        }
+
+        class StageMetric {
+            <<dataclass>>
+            +stage_name: str
+            +status: str
+            +start_time: float
+            +end_time: float
+            +rows_in: int
+            +rows_out: int
+            +error: str
+            +duration_seconds: float *
+            +rows_per_second: float *
+        }
+
+        class StageResult {
+            <<dataclass>>
+            +success: bool
+            +message: str
+            +rows_in: int
+            +rows_out: int
+            +error: str
+            +metadata: dict
+            +summary: str *
+        }
+
+        class PipelineStage {
+            <<abstract>>
+            +name: str
+            +description: str
+            +execute(ctx)* StageResult
+        }
+
+        class PipelineRunner {
+            +stages: list~PipelineStage~
+            +max_retries: int
+            +retry_delay: float
+            +on_success: Callable
+            +on_failure: Callable
+            +run(ctx) PipelineContext
+            -_execute_with_retry(stage, ctx, label, run_id) StageResult
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% PIPELINE STAGES (Concrete)
+    %% ════════════════════════════════════════════
+    namespace stages {
+        class ExtractStage {
+            +symbols: list~str~
+            +max_workers: int
+            +period: str
+            +incremental: bool
+            -_watermarks: WatermarkStore
+            -_fetcher: YFinanceFetcher
+            +execute(ctx) StageResult
+            -_fetch_incremental(symbol) tuple
+        }
+
+        class ValidateStage {
+            +min_rows: int
+            +max_rows: int
+            +execute(ctx) StageResult
+            -_build_suite() QualitySuite
+        }
+
+        class LoadStage {
+            -_settings: Settings
+            -_table_name: str
+            -_watermarks: WatermarkStore
+            +execute(ctx) StageResult
+            -_update_watermarks(df) void
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% QUALITY MODULE
+    %% ════════════════════════════════════════════
+    namespace quality {
+        class Severity {
+            <<enumeration>>
+            WARN
+            CRITICAL
+        }
+
+        class QualityCheck {
+            +name: str
+            +description: str
+            +severity: Severity
+            +check_fn: Callable
+            +run(df) QualityResult
+        }
+
+        class QualityResult {
+            <<dataclass>>
+            +check_name: str
+            +passed: bool
+            +severity: Severity
+            +message: str
+            +details: dict
+            +icon: str *
+            +summary: str *
+        }
+
+        class QualitySuite {
+            +name: str
+            -_checks: list~QualityCheck~
+            +add(check) QualitySuite
+            +run(df) SuiteResult
+        }
+
+        class SuiteResult {
+            <<dataclass>>
+            +suite_name: str
+            +results: list~QualityResult~
+            +all_passed: bool *
+            +critical_passed: bool *
+            +failures: list *
+            +critical_failures: list *
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% UTILS MODULE
+    %% ════════════════════════════════════════════
+    namespace utils {
+        class WatermarkStore {
+            -_dir: Path
+            -_file: Path
+            -_data: dict
+            +get(key, default) Any
+            +get_date(key, default) date
+            +set(key, value) void
+            +delete(key) void
+            +all() dict
+            +reset() void
+            -_load() dict
+            -_save() void
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% DATABRICKS MODULE
+    %% ════════════════════════════════════════════
+    namespace databricks {
+        class SparkTransforms {
+            +spark: SparkSession
+            +bronze_to_silver(bronze_df) DataFrame
+            +silver_to_gold(silver_df) DataFrame
+            +compute_sector_summary(gold_df) DataFrame
+        }
+    }
+
+    %% ════════════════════════════════════════════
+    %% RELATIONSHIPS
+    %% ════════════════════════════════════════════
+
+    %% Inheritance
+    BaseConnector <|-- SnowflakeConnector : extends
+    PipelineStage <|-- ExtractStage : extends
+    PipelineStage <|-- ValidateStage : extends
+    PipelineStage <|-- LoadStage : extends
+
+    %% Composition / Dependency
+    SnowflakeConnector --> Settings : uses
+    SnowflakeLoader --> SnowflakeConnector : has-a
+    SnowflakeLoader ..> IngestionResult : returns
+
+    YFinanceFetcher ..> IngestionResult : returns
+    YFinanceFetcher ..> StockPrice : creates
+
+    PipelineRunner --> PipelineStage : runs 1..*
+    PipelineRunner --> PipelineContext : uses
+    PipelineContext --> StageMetric : tracks 0..*
+
+    ExtractStage --> YFinanceFetcher : has-a
+    ExtractStage --> WatermarkStore : has-a
+    ValidateStage --> QualitySuite : creates
+    LoadStage --> SnowflakeConnector : creates
+    LoadStage --> SnowflakeLoader : creates
+    LoadStage --> WatermarkStore : has-a
+    LoadStage --> Settings : uses
+
+    QualitySuite --> QualityCheck : contains 0..*
+    QualityCheck --> QualityResult : produces
+    QualityCheck --> Severity : has
+    QualitySuite ..> SuiteResult : returns
+    SuiteResult --> QualityResult : contains 1..*

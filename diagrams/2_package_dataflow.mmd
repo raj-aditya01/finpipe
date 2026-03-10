@@ -1,0 +1,113 @@
+flowchart TB
+    subgraph CLI["cli.py — Command Line Interface"]
+        health["health"]
+        tables["tables"]
+        query["query"]
+        ingest["ingest"]
+        pipeline_cmd["pipeline"]
+    end
+
+    subgraph CONFIG["config/"]
+        Settings["Settings\n(Pydantic BaseSettings)\nLoads .env"]
+    end
+
+    subgraph MODELS["models/"]
+        StockSymbol["StockSymbol\n(Dimension)"]
+        StockPrice["StockPrice\n(Fact)"]
+        IngestionResult["IngestionResult\n(Value Object)"]
+        Enums["Exchange | MarketStatus\nTimeFrame | DataSource"]
+    end
+
+    subgraph CONNECTORS["connectors/"]
+        BaseConnector["BaseConnector\n(Abstract)"]
+        SnowflakeConnector["SnowflakeConnector\n(SQLAlchemy Engine)"]
+    end
+
+    subgraph INGESTION["ingestion/"]
+        YFinanceFetcher["YFinanceFetcher\n(ThreadPoolExecutor)"]
+        SnowflakeLoader["SnowflakeLoader\n(MERGE/Upsert)"]
+    end
+
+    subgraph PIPELINE["pipeline/"]
+        PipelineRunner["PipelineRunner\n(Orchestrator)"]
+        PipelineContext["PipelineContext\n(Shared State)"]
+        PipelineStage["PipelineStage\n(Abstract)"]
+        subgraph STAGES["stages/"]
+            ExtractStage["ExtractStage\n(Yahoo Finance)"]
+            ValidateStage["ValidateStage\n(Quality Gates)"]
+            LoadStage["LoadStage\n(Snowflake MERGE)"]
+        end
+    end
+
+    subgraph QUALITY["quality/"]
+        QualitySuite["QualitySuite"]
+        QualityCheck["QualityCheck\nnot_null | unique | in_range\nrow_count | freshness | schema"]
+        Severity["Severity\nWARN | CRITICAL"]
+    end
+
+    subgraph UTILS["utils/"]
+        WatermarkStore["WatermarkStore\n(JSON file)"]
+        RetryDecorator["retry_with_backoff\n(Exponential Backoff)"]
+    end
+
+    subgraph DATABRICKS["databricks/"]
+        SparkTransforms["SparkTransforms\n(PySpark)"]
+        RunNotebook["run.py\n(Databricks Notebook)"]
+    end
+
+    subgraph EXTERNAL["External Systems"]
+        YFinanceAPI["Yahoo Finance API"]
+        Snowflake["Snowflake DW"]
+        DeltaLake["Delta Lake\n(Databricks)"]
+    end
+
+    %% CLI wires everything
+    CLI --> CONFIG
+    CLI --> CONNECTORS
+    CLI --> INGESTION
+    CLI --> PIPELINE
+
+    %% Config flows into connectors
+    Settings --> SnowflakeConnector
+
+    %% Connector hierarchy
+    BaseConnector -.->|extends| SnowflakeConnector
+
+    %% Ingestion uses connectors and models
+    YFinanceFetcher --> YFinanceAPI
+    YFinanceFetcher -.->|returns| IngestionResult
+    SnowflakeLoader --> SnowflakeConnector
+    SnowflakeLoader -.->|returns| IngestionResult
+
+    %% Pipeline orchestration
+    PipelineRunner --> PipelineContext
+    PipelineRunner -->|runs| ExtractStage
+    PipelineRunner -->|runs| ValidateStage
+    PipelineRunner -->|runs| LoadStage
+    PipelineStage -.->|extends| ExtractStage
+    PipelineStage -.->|extends| ValidateStage
+    PipelineStage -.->|extends| LoadStage
+
+    %% Stage dependencies
+    ExtractStage --> YFinanceFetcher
+    ExtractStage --> WatermarkStore
+    ValidateStage --> QualitySuite
+    LoadStage --> SnowflakeLoader
+    LoadStage --> WatermarkStore
+
+    %% Quality
+    QualitySuite --> QualityCheck
+    QualityCheck --> Severity
+
+    %% Databricks
+    SparkTransforms --> Snowflake
+    SparkTransforms --> DeltaLake
+    RunNotebook --> SparkTransforms
+
+    %% External connections
+    SnowflakeConnector --> Snowflake
+    LoadStage --> Snowflake
+
+    %% Data flow arrows
+    ExtractStage ==>|"ctx.data['raw_prices']"| ValidateStage
+    ValidateStage ==>|"ctx.data['validated_prices']"| LoadStage

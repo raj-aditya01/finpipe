@@ -1,0 +1,81 @@
+sequenceDiagram
+    autonumber
+    participant CLI as CLI (cli.py)
+    participant Runner as PipelineRunner
+    participant Ctx as PipelineContext
+    participant Extract as ExtractStage
+    participant WM as WatermarkStore
+    participant YF as YFinanceFetcher
+    participant API as Yahoo Finance API
+    participant Validate as ValidateStage
+    participant QS as QualitySuite
+    participant Load as LoadStage
+    participant SF as SnowflakeConnector
+    participant Loader as SnowflakeLoader
+    participant DB as Snowflake DB
+
+    CLI->>Runner: run(ctx)
+    Runner->>Ctx: create(params)
+    Note over Ctx: run_id = uuid[:12]
+
+    rect rgb(230, 245, 255)
+        Note over Runner,API: STAGE 1: EXTRACT (Yahoo Finance → DataFrame)
+        Runner->>Ctx: start_stage("extract")
+        Runner->>Extract: execute(ctx)
+        Extract->>WM: get_date("extract.TCS.NS")
+        WM-->>Extract: last_date or None
+        Extract->>YF: fetch_multiple(symbols)
+        
+        par Concurrent Threads (ThreadPool)
+            YF->>API: GET TCS.NS history
+            YF->>API: GET RELIANCE.NS history
+            YF->>API: GET INFY.NS history
+        end
+        
+        API-->>YF: OHLCV DataFrames
+        YF-->>Extract: list[(DataFrame, IngestionResult)]
+        Extract->>Ctx: data["raw_prices"] = combined_df
+        Extract-->>Runner: StageResult(success, rows=500)
+        Runner->>Ctx: end_stage("extract", "success")
+    end
+
+    rect rgb(255, 245, 230)
+        Note over Runner,QS: STAGE 2: VALIDATE (Quality Gates)
+        Runner->>Ctx: start_stage("validate")
+        Runner->>Validate: execute(ctx)
+        Validate->>Ctx: get data["raw_prices"]
+        Validate->>QS: build suite (not_null, in_range, ...)
+        QS->>QS: run all checks
+        QS-->>Validate: SuiteResult(critical_passed=true)
+        Validate->>Ctx: data["validated_prices"] = df
+        Validate-->>Runner: StageResult(success, "8/8 passed")
+        Runner->>Ctx: end_stage("validate", "success")
+    end
+
+    rect rgb(230, 255, 230)
+        Note over Runner,DB: STAGE 3: LOAD (DataFrame → Snowflake)
+        Runner->>Ctx: start_stage("load")
+        Runner->>Load: execute(ctx)
+        Load->>Ctx: get data["validated_prices"]
+        Load->>SF: connect() via context manager
+        SF->>DB: SELECT CURRENT_TIMESTAMP()
+        DB-->>SF: connected
+        Load->>Loader: load_stock_prices(df)
+        Loader->>SF: CREATE staging table
+        SF->>DB: CREATE TABLE staging
+        Loader->>SF: batch INSERT (500 rows)
+        SF->>DB: INSERT INTO staging VALUES ...
+        Loader->>SF: MERGE staging → fact_stock_prices
+        SF->>DB: MERGE INTO fact_stock_prices
+        DB-->>SF: 500 rows merged
+        Loader->>SF: DROP staging table
+        Loader-->>Load: IngestionResult(rows_inserted=500)
+        Load->>WM: set("extract.TCS.NS", "2026-03-10")
+        Load->>SF: disconnect()
+        Load-->>Runner: StageResult(success, rows=500)
+        Runner->>Ctx: end_stage("load", "success")
+    end
+
+    Runner->>Ctx: summary_report()
+    Ctx-->>Runner: formatted report
+    Runner-->>CLI: PipelineContext (with metrics)
