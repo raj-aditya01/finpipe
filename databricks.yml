@@ -5,15 +5,60 @@
 bundle:
   name: finpipe
 
+include:
+  - resources/*.yml
+
+variables:
+  cluster_name:
+    description: Name of the job cluster
+    default: finpipe-cluster
+
+resources:
+  jobs:
+    finpipe_medallion:
+      name: finpipe-medallion-${bundle.target}
+      
+      tasks:
+        - task_key: bronze_to_gold
+          notebook_task:
+            notebook_path: ./finpipe/databricks/run.py
+            source: WORKSPACE
+          
+          # Serverless: no cluster config needed
+          
+      # No job_clusters section - workspace uses serverless by default
+      
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+        timezone_id: America/New_York
+        pause_status: PAUSED  # Start paused, enable manually
+      
+      email_notifications:
+        on_failure:
+          - adityaofficialuse@gmail.com
+
 targets:
   dev:
     mode: development
     default: true
     workspace:
       host: https://dbc-5e07d888-13ab.cloud.databricks.com
+      root_path: /Workspace/Users/adityaofficialuse@gmail.com/.bundle/finpipe/${bundle.target}
+    
+    resources:
+      jobs:
+        finpipe_medallion:
+          schedule:
+            pause_status: PAUSED
 
   ## Optionally, there could be 'staging' or 'prod' targets here.
   #
   # prod:
+  #   mode: production
   #   workspace:
   #     host: https://dbc-5e07d888-13ab.cloud.databricks.com
+  #   resources:
+  #     jobs:
+  #       finpipe_medallion:
+  #         schedule:
+  #           pause_status: UNPAUSED
